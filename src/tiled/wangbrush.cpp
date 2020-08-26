@@ -30,6 +30,7 @@
 #include "randompicker.h"
 #include "staggeredrenderer.h"
 #include "tilelayer.h"
+#include "wangfiller.h"
 
 #include <QStyleOptionGraphicsItem>
 #include <QtMath>
@@ -183,7 +184,9 @@ void WangBrush::languageChanged()
 void WangBrush::setColor(int color)
 {
     mCurrentColor = color;
-    mBrushMode = PaintEdgeAndCorner; // TODO: Some other way to switch this
+//    mBrushMode = PaintEdgeAndCorner; // TODO: Some other way to switch this
+//    mBrushMode = PaintEdge; // TODO: Some other way to switch this
+    mBrushMode = PaintCorner; // TODO: Some other way to switch this
 }
 
 void WangBrush::mouseMoved(const QPointF &pos, Qt::KeyboardModifiers modifiers)
@@ -433,7 +436,7 @@ void WangBrush::doPaint(bool mergeable)
     if (!tileLayer->isUnlocked())
         return;
 
-    if (!tileLayer->bounds().intersects(stamp->bounds()))
+    if (!tileLayer->map()->infinite() && !QRegion(tileLayer->rect()).intersects(brushItem()->tileRegion()))
         return;
 
     PaintTileLayer *paint = new PaintTileLayer(mapDocument(), tileLayer,
@@ -468,18 +471,6 @@ static const QPoint aroundVertexPoints[] = {
     QPoint(-1, -1)
 };
 
-static WangTile findMatchingWangTile(const WangSet *wangSet, WangId wangId)
-{
-    const auto potentials = wangSet->findMatchingWangTiles(wangId);
-    if (potentials.isEmpty())
-        return WangTile();
-
-    RandomPicker<WangTile> wangTiles;
-    for (const WangTile &wangTile : potentials)
-        wangTiles.add(wangTile, wangSet->wangTileProbability(wangTile));
-    return wangTiles.pick();
-}
-
 void WangBrush::updateBrush()
 {
     brushItem()->clear();
@@ -487,12 +478,15 @@ void WangBrush::updateBrush()
     if (!mWangSet)
         return;
 
-    TileLayer *currentLayer = currentTileLayer();
+    const TileLayer *currentLayer = currentTileLayer();
     Q_ASSERT(currentLayer);
 
     SharedTileLayer stamp = SharedTileLayer::create(QString(), 0, 0, 0, 0);
 
     auto staggeredRenderer = dynamic_cast<StaggeredRenderer*>(mapDocument()->renderer());
+
+    Grid<WangId> wangIds;
+    QRegion region;
 
     if (mIsTileMode) {
         //array of adjacent positions which is assigned based on map orientation.
@@ -519,44 +513,33 @@ void WangBrush::updateBrush()
                 adjacentPositions[i] = mPaintPoint + aroundTilePoints[i];
         }
 
-        if (mapDocument()->map()->infinite() || currentLayer->contains(mPaintPoint)) {
-            WangId centerWangId = mWangSet->wangIdOfCell(currentLayer->cellAt(mPaintPoint));
+        WangId centerWangId = mWangSet->wangIdOfCell(currentLayer->cellAt(mPaintPoint));
 
-            switch (mBrushMode) {
-            case PaintCorner:
-                for (int i = 0; i < 4; ++i)
-                    centerWangId.setCornerColor(i, mCurrentColor);
-                break;
-            case PaintEdge:
-                for (int i = 0; i < 4; ++i)
-                    centerWangId.setEdgeColor(i, mCurrentColor);
-                break;
-            case PaintEdgeAndCorner:
-                for (int i = 0; i < WangId::NumIndexes; ++i)
-                    centerWangId.setIndexColor(i, mCurrentColor);
-                break;
-            case Idle:
-                break;
+        switch (mBrushMode) {
+        case PaintCorner:
+            for (int i = 0; i < 4; ++i) {
+                centerWangId.setCornerColor(i, mCurrentColor);
+                centerWangId.setMaskCorner(i, true);
             }
-
-            const Cell &cell = findMatchingWangTile(mWangSet, centerWangId).makeCell();
-            if (cell.isEmpty()) {
-                QRegion r = QRect(mPaintPoint, QSize(1, 1));
-
-                for (int i = 0; i < 8; i += 2)
-                    r += QRect(adjacentPositions[i], QSize(1, 1));
-
-                if (mBrushMode == PaintCorner || mBrushMode == PaintEdgeAndCorner)
-                    for (int i = 1; i < 8; i += 2)
-                        r += QRect(adjacentPositions[i], QSize(1, 1));
-
-                static_cast<WangBrushItem*>(brushItem())->setInvalidTiles(r);
-                return;
+            break;
+        case PaintEdge:
+            for (int i = 0; i < 4; ++i) {
+                centerWangId.setEdgeColor(i, mCurrentColor);
+                centerWangId.setMaskEdge(i, true);
             }
-
-            QPoint p = mPaintPoint - stamp->position();
-            stamp->setCell(p.x(), p.y(), cell);
+            break;
+        case PaintEdgeAndCorner:
+            for (int i = 0; i < WangId::NumIndexes; ++i) {
+                centerWangId.setIndexColor(i, mCurrentColor);
+                centerWangId.setMaskIndex(i, true);
+            }
+            break;
+        case Idle:
+            break;
         }
+
+        region += QRect(mPaintPoint, QSize(1, 1));
+        wangIds.set(mPaintPoint, centerWangId);
 
         for (int i = 0; i < 8; ++i) {
             const bool isCorner = i & 1;
@@ -565,37 +548,23 @@ void WangBrush::updateBrush()
 
             QPoint p = adjacentPositions[i];
             WangId wangId = mWangSet->wangIdOfCell(currentLayer->cellAt(p));
-            if (!wangId)
-                continue;
 
             // Mark the opposite side or corner of the adjacent tile
             if (isCorner || (mBrushMode == PaintEdge || mBrushMode == PaintEdgeAndCorner)) {
                 wangId.setIndexColor(WangId::oppositeIndex(i), mCurrentColor);
+                wangId.setMaskIndex(WangId::oppositeIndex(i), true);
             }
 
             // Mark the touching corners of the adjacent tile
             if (!isCorner && (mBrushMode == PaintCorner || mBrushMode == PaintEdgeAndCorner)) {
                 wangId.setIndexColor((i + 3) % WangId::NumIndexes, mCurrentColor);
                 wangId.setIndexColor((i + 5) % WangId::NumIndexes, mCurrentColor);
+                wangId.setMaskIndex((i + 3) % WangId::NumIndexes, true);
+                wangId.setMaskIndex((i + 5) % WangId::NumIndexes, true);
             }
 
-            const Cell &cell = findMatchingWangTile(mWangSet, wangId).makeCell();
-
-            if (cell.isEmpty()) {
-                QRegion r = QRect(mPaintPoint, QSize(1, 1));
-
-                for (int j = 0; j < 8; j += 2)
-                    r += QRect(adjacentPositions[j], QSize(1, 1));
-
-                if (mBrushMode == PaintCorner || mBrushMode == PaintEdgeAndCorner)
-                    for (int j = 1; j < 8; j += 2)
-                        r += QRect(adjacentPositions[j], QSize(1, 1));
-
-                static_cast<WangBrushItem*>(brushItem())->setInvalidTiles(r);
-                return;
-            }
-
-            stamp->setCell(p.x(), p.y(), cell);
+            region += QRect(p, QSize(1, 1));
+            wangIds.set(p, wangId);
         }
     } else {
         if (mWangIndex == WangId::NumIndexes)
@@ -623,26 +592,16 @@ void WangBrush::updateBrush()
             }
 
             for (int i = 0; i < 4; ++i) {
-                QPoint p = adjacentPoints[i];
+                const QPoint p = adjacentPoints[i];
+
+                region += QRect(p, QSize(1, 1));
+
                 WangId wangId = mWangSet->wangIdOfCell(currentLayer->cellAt(p));
-                if (!wangId)
-                    continue;
-
                 wangId.setCornerColor((i + 2) % 4, mCurrentColor);
-
-                const Cell &cell = findMatchingWangTile(mWangSet, wangId).makeCell();
-
-                if (cell.isEmpty()) {
-                    QRegion r;
-                    for (int j = 0; j < 4; ++j)
-                        r += QRect(adjacentPoints[j], QSize(1, 1));
-
-                    static_cast<WangBrushItem*>(brushItem())->setInvalidTiles(r);
-                    return;
-                }
-
-                stamp->setCell(p.x(), p.y(), cell);
+                wangId.setMaskCorner((i + 2) % 4, true);
+                wangIds.set(p, wangId);
             }
+
             break;
         }
         case PaintEdge: {
@@ -668,35 +627,22 @@ void WangBrush::updateBrush()
                 dirPoint = mPaintPoint + aroundTilePoints[mWangIndex];
             }
 
-            if (WangId wangId = mWangSet->wangIdOfCell(currentLayer->cellAt(mPaintPoint))) {
+            region += QRect(mPaintPoint, QSize(1, 1));
+            region += QRect(dirPoint, QSize(1, 1));
+
+            {
+                WangId wangId = mWangSet->wangIdOfCell(currentLayer->cellAt(mPaintPoint));
                 wangId.setIndexColor(mWangIndex, mCurrentColor);
-
-                const Cell &cell = findMatchingWangTile(mWangSet, wangId).makeCell();
-
-                if (cell.isEmpty()) {
-                    QRegion r = QRect(mPaintPoint, QSize(1, 1));
-                    r += QRect(dirPoint, QSize(1, 1));
-                    static_cast<WangBrushItem*>(brushItem())->setInvalidTiles(r);
-                    return;
-                }
-
-                stamp->setCell(mPaintPoint.x(), mPaintPoint.y(), cell);
+                wangId.setMaskIndex(mWangIndex, true);
+                wangIds.set(mPaintPoint, wangId);
             }
-
-            if (WangId wangId = mWangSet->wangIdOfCell(currentLayer->cellAt(dirPoint))) {
+            {
+                WangId wangId = mWangSet->wangIdOfCell(currentLayer->cellAt(dirPoint));
                 wangId.setIndexColor(WangId::oppositeIndex(mWangIndex), mCurrentColor);
-
-                const Cell &cell = findMatchingWangTile(mWangSet, wangId).makeCell();
-
-                if (cell.isEmpty()) {
-                    QRegion r = QRect(mPaintPoint, QSize(1, 1));
-                    r += QRect(dirPoint, QSize(1, 1));
-                    static_cast<WangBrushItem*>(brushItem())->setInvalidTiles(r);
-                    return;
-                }
-
-                stamp->setCell(dirPoint.x(), dirPoint.y(), cell);
+                wangId.setMaskIndex(WangId::oppositeIndex(mWangIndex), true);
+                wangIds.set(dirPoint, wangId);
             }
+
             break;
         }
         case PaintEdgeAndCorner:    // Handled before switch
@@ -704,6 +650,9 @@ void WangBrush::updateBrush()
             break;
         }
     }
+
+    const WangFiller wangFiller{ *mWangSet, staggeredRenderer };
+    wangFiller.fillRegion(*stamp, *currentLayer, std::move(wangIds), region);
 
     static_cast<WangBrushItem*>(brushItem())->setInvalidTiles();
 

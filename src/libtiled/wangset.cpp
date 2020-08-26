@@ -131,6 +131,25 @@ void WangId::setIndexColor(int index, unsigned value)
     mId |= (value & 0xf) << (index * 4);
 }
 
+void WangId::setMaskEdge(int index, bool value)
+{
+    Q_ASSERT(index >= 0 && index < 4);
+    setMaskIndex(index * 2, value);
+}
+
+void WangId::setMaskCorner(int index, bool value)
+{
+    Q_ASSERT(index >= 0 && index < 4);
+    setMaskIndex(index * 2 + 1, value);
+}
+
+void WangId::setMaskIndex(int index, bool value)
+{
+    Q_ASSERT(index >= 0 && index < NumIndexes);
+    mMask &= ~(0xf << (index * 4));
+    mMask |= (value ? 0xf : 0x0) << (index * 4);
+}
+
 /**
  * Matches this WangId's edges/corners with an \a adjacent one.
  * Where \a position is 0-7 with 0 being top, and 7 being top left:
@@ -141,15 +160,37 @@ void WangId::setIndexColor(int index, unsigned value)
  */
 void WangId::updateToAdjacent(WangId adjacent, int position)
 {
-    int index = position / 2;
-    bool isCorner = position & 1;
+    setIndexColor(position, adjacent.indexColor(oppositeIndex(position)));
+    setMaskIndex(position, true);
 
-    if (isCorner) {
-        setCornerColor(index, adjacent.cornerColor((index + 2) % 4));
-    } else {
-        setEdgeColor(index, adjacent.edgeColor((index + 2) % 4));
+    const bool isCorner = position & 1;
+    if (!isCorner) {
+        const int index = position / 2;
         setCornerColor(index, adjacent.cornerColor((index + 1) % 4));
         setCornerColor((index + 3) % 4, adjacent.cornerColor((index + 2) % 4));
+        setMaskCorner(index, true);
+        setMaskCorner((index + 3) % 4, true);
+    }
+}
+
+void WangId::mergeFromAdjacent(WangId adjacent, int position)
+{
+    if (!indexColor(position)) {
+        setIndexColor(position, adjacent.indexColor(oppositeIndex(position)));
+        setMaskIndex(position, indexColor(position) > 0);
+    }
+
+    const bool isCorner = position & 1;
+    if (!isCorner) {
+        const int index = position / 2;
+        if (!cornerColor(index)) {
+            setCornerColor(index, adjacent.cornerColor((index + 1) % 4));
+            setMaskCorner(index, cornerColor(index) > 0);
+        }
+        if (!cornerColor((index + 3) % 4)) {
+            setCornerColor((index + 3) % 4, adjacent.cornerColor((index + 2) % 4));
+            setMaskCorner((index + 3) % 4, cornerColor((index + 3) % 4) > 0);
+        }
     }
 }
 
@@ -169,7 +210,7 @@ bool WangId::hasWildCards() const
 /**
  * Returns a mask that is 0 for any indexes that have no color defined.
  */
-unsigned WangId::mask() const
+unsigned WangId::computeMask() const
 {
     unsigned mask = 0;
     for (int i = 0; i < NumIndexes; ++i) {
@@ -177,6 +218,11 @@ unsigned WangId::mask() const
             mask |= 0xf << (i * 4);
     }
     return mask;
+}
+
+unsigned WangId::mask() const
+{
+    return mMask;
 }
 
 /**
@@ -509,9 +555,10 @@ QList<WangTile> WangSet::findMatchingWangTiles(WangId wangId) const
     QList<WangTile> list;
 
     const unsigned mask = wangId.mask();
+    const unsigned maskedWangId = wangId & mask;
 
     for (const WangTile &wangTile : mWangIdToWangTile) {
-        if ((wangTile.wangId() & mask) == wangId)
+        if ((wangTile.wangId() & mask) == maskedWangId)
             list.append(wangTile);
     }
 

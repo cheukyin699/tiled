@@ -69,9 +69,15 @@ public:
 
     void setIndexColor(int index, unsigned value);
 
+    void setMaskEdge(int index, bool value = true);
+    void setMaskCorner(int index, bool value = true);
+    void setMaskIndex(int index, bool value = true);
+
     void updateToAdjacent(WangId adjacent, int position);
+    void mergeFromAdjacent(WangId adjacent, int position);
 
     bool hasWildCards() const;
+    unsigned computeMask() const;
     unsigned mask() const;
 
     void rotate(int rotations);
@@ -83,11 +89,26 @@ public:
 
 private:
     unsigned mId;
+    unsigned mMask = 0; // TODO: Move to only where needed (WangFiller)
 };
 
 inline WangId::Index WangId::oppositeIndex(int index)
 {
     return static_cast<Index>((index + 4) % NumIndexes);
+}
+
+inline QDebug operator<<(QDebug debug, WangId wangId)
+{
+    const bool oldSetting = debug.autoInsertSpaces();
+    debug.nospace() << "WangId(";
+    for (int i = 0; i < WangId::NumIndexes; ++i) {
+        if (i > 0)
+            debug << ",";
+        debug << wangId.indexColor(i);
+    }
+    debug << ')';
+    debug.setAutoInsertSpaces(oldSetting);
+    return debug.maybeSpace();
 }
 
 
@@ -100,8 +121,7 @@ public:
     WangTile() : WangTile(nullptr, 0)
     {}
 
-    WangTile(Tile *tile,
-             WangId wangId):
+    WangTile(Tile *tile, WangId wangId):
         mTile(tile),
         mWangId(wangId),
         mFlippedHorizontally(false),

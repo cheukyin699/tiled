@@ -20,6 +20,7 @@
 
 #pragma once
 
+#include "grid.h"
 #include "map.h"
 #include "wangset.h"
 
@@ -44,8 +45,7 @@ class WangFiller
 {
 public:
     explicit WangFiller(const WangSet &wangSet,
-                        const StaggeredRenderer *staggeredRenderer = nullptr,
-                        Map::StaggerAxis staggerAxis = Map::StaggerX);
+                        const StaggeredRenderer *staggeredRenderer = nullptr);
 
     /**
      * Finds a cell from the attached WangSet which fits the given
@@ -57,10 +57,15 @@ public:
                          QPoint point) const;
 
     /**
-     * Returns a TileLayer which has \a fillRegion filled with Wang methods.
+     * Fills the given \a region in the \a target layer with Wang methods.
      */
-    std::unique_ptr<TileLayer> fillRegion(const TileLayer &back,
-                                          const QRegion &fillRegion) const;
+    void fillRegion(TileLayer &target, const TileLayer &back, const QRegion &region) const;
+
+    /**
+     * Fills the given \a region in the \a target layer with Wang methods,
+     * based on the desired \a wangIds.
+     */
+    void fillRegion(TileLayer &target, const TileLayer &back, Grid<WangId> wangIds, const QRegion &region) const;
 
 private:
     /**
@@ -92,7 +97,6 @@ private:
 
     const WangSet &mWangSet;
     const StaggeredRenderer * const mStaggeredRenderer;
-    const Map::StaggerAxis mStaggerAxis;
 };
 
 } // namespace Tiled
